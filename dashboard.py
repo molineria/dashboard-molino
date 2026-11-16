@@ -29,6 +29,12 @@ def cargar_datos():
     df_paradas = pd.DataFrame(res_paradas.data) if res_paradas.data else pd.DataFrame()
 
     try:
+        res_acopio = supabase.table("poc_stock_acopio").select("*").order("fecha", desc=True).execute()
+        df_acopio = pd.DataFrame(res_acopio.data) if res_acopio.data else pd.DataFrame()
+    except Exception:
+        df_acopio = pd.DataFrame()
+
+    try:
         res_sem = supabase.table("poc_gestion_semanal").select("*").order("inicio_sab", desc=True).execute()
         df_sem = pd.DataFrame(res_sem.data) if res_sem.data else pd.DataFrame()
     except Exception:
@@ -46,7 +52,7 @@ def cargar_datos():
     except Exception:
         df_ev = pd.DataFrame()
 
-    return df_cabecera, df_productos, df_paradas, df_sem, df_lab, df_ev
+    return df_cabecera, df_productos, df_paradas, df_acopio, df_sem, df_lab, df_ev
 
 def parsear_horas_a_decimal(val):
     if not val or str(val).lower() == 'none':
@@ -67,15 +73,16 @@ if st.sidebar.button("🔄 Actualizar Datos", use_container_width=True):
     st.rerun()
 
 try:
-    df_cabecera, df_productos, df_paradas, df_sem, df_lab, df_ev = cargar_datos()
+    df_cabecera, df_productos, df_paradas, df_acopio, df_sem, df_lab, df_ev = cargar_datos()
 
-    tab_diario, tab_semanal = st.tabs([
+    tab_diario, tab_acopio, tab_semanal = st.tabs([
         "🏭 Producción Diaria & Turnos",
+        "🌾 Stock Planta Acopio (Silos)",
         "📊 Gestión Semanal (Plan vs Real · Envasado · Laboratorio)"
     ])
 
     # =========================================================================
-    # PESTAÑA 1: PRODUCCIÓN DIARIA Y TURNOS (TU VISTA ACTUAL INTACTA)
+    # PESTAÑA 1: PRODUCCIÓN DIARIA Y TURNOS
     # =========================================================================
     with tab_diario:
         if not df_cabecera.empty:
@@ -229,25 +236,84 @@ try:
                 st.success("No se registraron paradas de planta en este turno.")
 
     # =========================================================================
-    # PESTAÑA 2: GESTIÓN SEMANAL (KAN BAN PLANIFICACIÓN)
+    # PESTAÑA 2: STOCK PLANTA ACOPIO (SILOS)
+    # =========================================================================
+    with tab_acopio:
+        if df_acopio.empty:
+            st.info("Aún no hay registros de stock de acopio sincronizados en Supabase.")
+        else:
+            df_acopio["toneladas"] = pd.to_numeric(df_acopio["toneladas"], errors="coerce").fillna(0.0)
+            df_acopio["corte"] = df_acopio["fecha"].astype(str) + " " + df_acopio["hora"].astype(str)
+            cortes_unicos = sorted(df_acopio["corte"].unique().tolist(), reverse=True)
+
+            corte_sel = st.selectbox("Seleccionar Corte de Inventario (Fecha y Hora)", cortes_unicos)
+            df_corte = df_acopio[df_acopio["corte"] == corte_sel].copy()
+
+            # Ordenar silos de forma natural (1A..5A, 1..8, etc.)
+            df_corte = df_corte.sort_values(by=["grano", "silo"])
+
+            total_tn = df_corte["toneladas"].sum()
+            trigo_tn = df_corte[df_corte["grano"].str.contains("TRIGO", na=False)]["toneladas"].sum()
+            maiz_tn = df_corte[df_corte["grano"].str.contains("MAIZ|MAÍZ", na=False)]["toneladas"].sum()
+            silos_activos = len(df_corte[df_corte["toneladas"] > 0])
+
+            a1, a2, a3, a4 = st.columns(4)
+            a1.metric("Stock Total Acopio", f"{total_tn:,.2f} t")
+            a2.metric("Total Trigo", f"{trigo_tn:,.2f} t")
+            a3.metric("Total Maíz", f"{maiz_tn:,.2f} t")
+            a4.metric("Silos con Existencia", f"{silos_activos} / {len(df_corte)}")
+
+            st.markdown("---")
+
+            col_ac_izq, col_ac_der = st.columns([1.4, 1])
+
+            with col_ac_izq:
+                st.subheader("🏗️ Existencia por Silo (Toneladas)")
+                fig_silos = px.bar(
+                    df_corte,
+                    x="silo",
+                    y="toneladas",
+                    color="grano",
+                    text="toneladas",
+                    labels={"silo": "Silo", "toneladas": "Toneladas (t)", "grano": "Grano"},
+                    title=f"Distribución por Silo ({corte_sel})"
+                )
+                fig_silos.update_traces(texttemplate="%{text:,.1f} t", textposition="outside")
+                st.plotly_chart(fig_silos, use_container_width=True)
+
+            with col_ac_der:
+                st.subheader("🌾 Participación por Grano")
+                df_grano = df_corte.groupby("grano", as_index=False)["toneladas"].sum()
+                fig_grano = px.pie(
+                    df_grano,
+                    names="grano",
+                    values="toneladas",
+                    hole=0.4,
+                    title="Proporción de stock por grano"
+                )
+                st.plotly_chart(fig_grano, use_container_width=True)
+
+            st.subheader("📋 Detalle de Silos del Corte")
+            df_acopio_tabla = df_corte[["silo", "grano", "toneladas"]].copy()
+            df_acopio_tabla["toneladas"] = df_acopio_tabla["toneladas"].apply(lambda x: f"{x:,.2f} t")
+            df_acopio_tabla.columns = ["Silo", "Grano / Calidad", "Stock (t)"]
+            st.dataframe(df_acopio_tabla, hide_index=True, use_container_width=True)
+
+    # =========================================================================
+    # PESTAÑA 3: GESTIÓN SEMANAL (KAN BAN PLANIFICACIÓN)
     # =========================================================================
     with tab_semanal:
         if df_sem.empty:
             st.info("Aún no hay datos sincronizados de Gestión Semanal. Ejecuta `ingesta_gestion.py` en la PC de Planta.")
         else:
             df_sem["etiqueta"] = df_sem["inicio_sab"].astype(str) + " al " + df_sem["fin_vie"].astype(str)
-            # Seleccionar por defecto la última semana con dato real cargado (> 0)
             con_real = df_sem[pd.to_numeric(df_sem["dias_dato_real"], errors="coerce").fillna(0) > 0]
-            default_idx = 0
-            if not con_real.empty:
-                # Si la semana activa tiene pocos días y la anterior está completa, mostrar la última con datos
-                default_idx = df_sem.index.get_loc(con_real.index[0])
+            default_idx = int(df_sem.index.get_loc(con_real.index[0])) if not con_real.empty else 0
 
-            sem_sel_label = st.selectbox("Seleccionar Semana (Sábado a Viernes)", df_sem["etiqueta"].tolist(), index=int(default_idx))
+            sem_sel_label = st.selectbox("Seleccionar Semana (Sábado a Viernes)", df_sem["etiqueta"].tolist(), index=default_idx)
             sem = df_sem[df_sem["etiqueta"] == sem_sel_label].iloc[0]
             ini_sel = sem["inicio_sab"]
 
-            # --- KPIs PRINCIPALES DE LA SEMANA ---
             trigo_mol = float(sem.get("trigo_molido_t") or 0)
             obj_trigo = float(sem.get("objetivo_trigo_t") or 0)
             cumpl = float(sem.get("cumplimiento_pct") or 0)
@@ -267,7 +333,6 @@ try:
 
             st.markdown("---")
 
-            # --- GRÁFICO PLAN VS REAL POR PRODUCTO Y ENVASADO ---
             c_izq, c_der = st.columns(2)
 
             with c_izq:
@@ -320,7 +385,6 @@ try:
 
             st.markdown("---")
 
-            # --- LABORATORIO Y EVENTOS SEMANALES ---
             col_lab, col_ev = st.columns([1.4, 1])
 
             with col_lab:
@@ -343,7 +407,6 @@ try:
                 else:
                     st.success("Sin eventos no programados registrados en esta semana.")
 
-            # --- SUBPRODUCTOS, PELLET Y MAÍZ ---
             st.markdown("---")
             st.subheader("🌽 Subproductos, Pellet y Línea de Maíz")
             s1, s2, s3, s4 = st.columns(4)
