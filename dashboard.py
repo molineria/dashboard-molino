@@ -249,7 +249,6 @@ try:
             corte_sel = st.selectbox("Seleccionar Corte de Inventario (Fecha y Hora)", cortes_unicos)
             df_corte = df_acopio[df_acopio["corte"] == corte_sel].copy()
 
-            # Ordenar silos de forma natural (1A..5A, 1..8, etc.)
             df_corte = df_corte.sort_values(by=["grano", "silo"])
 
             total_tn = df_corte["toneladas"].sum()
@@ -306,11 +305,33 @@ try:
         if df_sem.empty:
             st.info("Aún no hay datos sincronizados de Gestión Semanal. Ejecuta `ingesta_gestion.py` en la PC de Planta.")
         else:
-            df_sem["etiqueta"] = df_sem["inicio_sab"].astype(str) + " al " + df_sem["fin_vie"].astype(str)
-            con_real = df_sem[pd.to_numeric(df_sem["dias_dato_real"], errors="coerce").fillna(0) > 0]
-            default_idx = int(df_sem.index.get_loc(con_real.index[0])) if not con_real.empty else 0
+            hoy_iso = pd.Timestamp.now().strftime("%Y-%m-%d")
 
-            sem_sel_label = st.selectbox("Seleccionar Semana (Sábado a Viernes)", df_sem["etiqueta"].tolist(), index=default_idx)
+            def formatear_semana(row):
+                ini = str(row["inicio_sab"])
+                fin = str(row["fin_vie"])
+                ini_fmt = pd.to_datetime(ini).strftime("%d/%m/%Y")
+                fin_fmt = pd.to_datetime(fin).strftime("%d/%m/%Y")
+                dias = float(row.get("dias_dato_real") or 0)
+                if ini <= hoy_iso <= fin:
+                    estado = f"🟢 Semana en curso ({dias:g} días)"
+                elif ini > hoy_iso:
+                    estado = "📅 Planificada (futura)"
+                else:
+                    estado = f"✅ Cerrada ({dias:g} días)"
+                return f"Sáb {ini_fmt} al Vie {fin_fmt} — {estado}"
+
+            df_sem = df_sem.sort_values("inicio_sab", ascending=False).reset_index(drop=True)
+            df_sem["etiqueta"] = df_sem.apply(formatear_semana, axis=1)
+
+            en_curso = df_sem[(df_sem["inicio_sab"] <= hoy_iso) & (df_sem["fin_vie"] >= hoy_iso)]
+            if not en_curso.empty:
+                default_idx = int(en_curso.index[0])
+            else:
+                pasadas = df_sem[df_sem["inicio_sab"] <= hoy_iso]
+                default_idx = int(pasadas.index[0]) if not pasadas.empty else 0
+
+            sem_sel_label = st.selectbox("Seleccionar Semana Operativa (Sábado a Viernes)", df_sem["etiqueta"].tolist(), index=default_idx)
             sem = df_sem[df_sem["etiqueta"] == sem_sel_label].iloc[0]
             ini_sel = sem["inicio_sab"]
 
@@ -370,7 +391,7 @@ try:
 
             with c_der:
                 st.subheader("📈 Evolución Semanal de Cumplimiento (%)")
-                df_hist = df_sem[pd.to_numeric(df_sem["cumplimiento_pct"], errors="coerce").notna()].sort_values("inicio_sab")
+                df_hist = df_sem[(df_sem["inicio_sab"] <= hoy_iso) & (pd.to_numeric(df_sem["cumplimiento_pct"], errors="coerce").notna())].sort_values("inicio_sab")
                 if not df_hist.empty:
                     fig_evol = px.line(
                         df_hist,
