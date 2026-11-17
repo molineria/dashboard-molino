@@ -66,6 +66,15 @@ def parsear_horas_a_decimal(val):
     except Exception:
         return 0.0
 
+def obtener_horas_netas_str(row):
+    hn = row.get('horas_netas')
+    if hn and str(hn).lower() not in ('none', 'nan', ''):
+        return str(hn)
+    hm = row.get('horas_marcha')
+    if hm and str(hm).lower() not in ('none', 'nan', ''):
+        return str(hm)
+    return "08:00:00"
+
 st.title("🌾 Dashboard de Producción - Molino de Trigo")
 
 if st.sidebar.button("🔄 Actualizar Datos", use_container_width=True):
@@ -100,6 +109,7 @@ try:
             orden_turnos = {'MAÑANA': 1, 'MANANA': 1, 'TARDE': 2, 'NOCHE': 3}
             df_fecha['orden'] = df_fecha['turno'].str.upper().str.strip().map(orden_turnos).fillna(99)
             df_fecha = df_fecha.sort_values(by=['orden', 'id'])
+            df_fecha['hs_netas_efectivas'] = df_fecha.apply(obtener_horas_netas_str, axis=1)
 
             st.header(f"📅 Resumen Consolidado del Día ({fecha_sel})")
 
@@ -111,13 +121,13 @@ try:
             ext_norm = ext_series.apply(lambda x: x * 100 if x <= 1 else x)
             ext_prom_dia = ext_norm.mean() if not ext_norm.empty else 0.0
 
-            horas_dia = df_fecha['horas_marcha'].apply(parsear_horas_a_decimal).sum()
+            horas_dia = df_fecha['hs_netas_efectivas'].apply(parsear_horas_a_decimal).sum()
 
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Turnos Cargados", f"{cant_turnos} / 3")
             k2.metric("Producción Total del Día", kgs_dia_str)
             k3.metric("% Extracción Promedio", f"{ext_prom_dia:.2f}%")
-            k4.metric("Horas Marcha Totales", f"{horas_dia:.2f} hs")
+            k4.metric("Horas Marcha Netas (Día)", f"{horas_dia:.2f} hs")
 
             ids_dia = df_fecha['id'].tolist()
             df_prod_dia = df_productos[df_productos['registro_id'].isin(ids_dia)].copy() if not df_productos.empty else pd.DataFrame()
@@ -126,14 +136,14 @@ try:
 
             with col_res_izq:
                 st.subheader("⏱️ Comparativa por Turno")
-                df_turnos_tabla = df_fecha[['turno', 'responsable', 'horas_marcha', 'kgs_totales_producidos', 'porcentaje_extraccion']].copy()
+                df_turnos_tabla = df_fecha[['turno', 'responsable', 'hs_netas_efectivas', 'kgs_totales_producidos', 'porcentaje_extraccion']].copy()
                 df_turnos_tabla['kgs_totales_producidos'] = df_turnos_tabla['kgs_totales_producidos'].apply(
                     lambda x: f"{int(x):,} kg" if pd.notna(x) and float(x).is_integer() else f"{float(x or 0):,.2f} kg"
                 )
                 df_turnos_tabla['porcentaje_extraccion'] = df_turnos_tabla['porcentaje_extraccion'].apply(
                     lambda x: f"{float(x)*100:.2f}%" if pd.notna(x) and float(x) <= 1 else f"{float(x or 0):.2f}%"
                 )
-                df_turnos_tabla.columns = ['Turno', 'Responsable', 'Hs. Marcha', 'Kgs Producidos', '% Extracción']
+                df_turnos_tabla.columns = ['Turno', 'Responsable', 'Hs. Marcha Netas', 'Kgs Producidos', '% Extracción']
                 st.dataframe(df_turnos_tabla, hide_index=True, use_container_width=True)
 
             with col_res_der:
@@ -171,8 +181,7 @@ try:
             ext_val = float(registro_actual.get('porcentaje_extraccion', 0) or 0)
             ext_str = f"{ext_val * 100:.2f}%" if ext_val <= 1 else f"{ext_val:.2f}%"
 
-            hm = registro_actual.get('horas_marcha')
-            hm_str = str(hm) if hm and str(hm).lower() != 'none' else "08:00:00"
+            hm_str = obtener_horas_netas_str(registro_actual)
 
             col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Responsable", registro_actual.get('responsable', 'N/A'))
