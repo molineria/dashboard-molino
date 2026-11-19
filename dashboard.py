@@ -560,4 +560,4 @@ try:
 
             col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Responsable", registro_actual.get('responsable', 'N/A'))
-            col2.
+            col2.metric
