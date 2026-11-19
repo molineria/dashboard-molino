@@ -675,4 +675,127 @@ try:
                     estado = "📅 Planificada (futura)"
                 else:
                     estado = f"✅ Cerrada ({dias:g} días)"
-                return f"Sáb {ini_fmt} al Vie
+                return f"Sáb {ini_fmt} al Vie {fin_fmt} — {estado}"
+
+            df_sem = df_sem.sort_values("inicio_sab", ascending=False).reset_index(drop=True)
+            df_sem["etiqueta"] = df_sem.apply(formatear_semana, axis=1)
+
+            en_curso = df_sem[(df_sem["inicio_sab"] <= hoy_iso) & (df_sem["fin_vie"] >= hoy_iso)]
+            if not en_curso.empty:
+                default_idx = int(en_curso.index[0])
+            else:
+                pasadas = df_sem[df_sem["inicio_sab"] <= hoy_iso]
+                default_idx = int(pasadas.index[0]) if not pasadas.empty else 0
+
+            sem_sel_label = st.selectbox("Seleccionar Semana Operativa (Sábado a Viernes)", df_sem["etiqueta"].tolist(), index=default_idx)
+            sem = df_sem[df_sem["etiqueta"] == sem_sel_label].iloc[0]
+            ini_sel = sem["inicio_sab"]
+
+            trigo_mol = float(sem.get("trigo_molido_t") or 0)
+            obj_trigo = float(sem.get("objetivo_trigo_t") or 0)
+            cumpl = float(sem.get("cumplimiento_pct") or 0)
+            hs_plan = float(sem.get("horas_plan_h") or sem.get("horas_trabajadas") or 0)
+            hs_real = float(sem.get("horas_reales_h") or 0)
+            ext_real = float(sem.get("extraccion_real_pct") or 0)
+            desv_harina = float(sem.get("desvio_real_t_harina") or 0)
+            env_tot = float(sem.get("envasado_total_t") or 0)
+            pal_tot = float(sem.get("pallets_reales_total") or 0)
+
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Trigo Molido / Obj.", f"{trigo_mol:,.1f} t", f"{cumpl:.1f}% cumpl. (Obj: {obj_trigo:,.0f} t)")
+            m2.metric("Horas Plan vs Real", f"{hs_real:,.1f} h" if hs_real > 0 else f"{hs_plan:,.1f} h plan", f"Plan: {hs_plan:,.1f} h")
+            m3.metric("Extracción Real", f"{ext_real:.2f}%" if ext_real > 0 else "Sin cierre", f"{desv_harina:+.2f} t harina vs meta" if ext_real > 0 else None)
+            m4.metric("Total Envasado", f"{env_tot:,.2f} t" if env_tot > 0 else "–")
+            m5.metric("Pallets Reales", f"{int(pal_tot):,} plts" if pal_tot > 0 else "–")
+
+            st.markdown("---")
+
+            c_izq, c_der = st.columns(2)
+
+            with c_izq:
+                st.subheader("🎯 Harina: Plan vs Real vs Envasado (t)")
+                productos_comp = ["3/0 Pan", "3/0 Pasta", "4/0", "TP", "Semolín"]
+                plan_vals = [
+                    float(sem.get("plan_30_pan_t") or 0),
+                    float(sem.get("plan_30_pasta_t") or 0),
+                    float(sem.get("plan_40_t") or 0),
+                    float(sem.get("plan_tp_t") or 0),
+                    float(sem.get("plan_semolin_t") or 0),
+                ]
+                real_vals = [
+                    float(sem.get("real_30_pan_t") or 0),
+                    float(sem.get("real_30_pasta_t") or 0),
+                    float(sem.get("real_40_t") or 0),
+                    float(sem.get("real_tp_t") or 0),
+                    float(sem.get("real_semolin_t") or 0),
+                ]
+                env_vals = [
+                    float(sem.get("envasado_30_t") or 0),
+                    0.0,
+                    float(sem.get("envasado_40_t") or 0),
+                    float(sem.get("envasado_tp_t") or 0),
+                    float(sem.get("envasado_semolin_t") or 0),
+                ]
+
+                fig_comp = go.Figure(data=[
+                    go.Bar(name="Plan (t)", x=productos_comp, y=plan_vals),
+                    go.Bar(name="Real Producido (t)", x=productos_comp, y=real_vals),
+                    go.Bar(name="Envasado Real (t)", x=productos_comp, y=env_vals),
+                ])
+                fig_comp.update_layout(barmode="group", yaxis_title="Toneladas (t)", legend=dict(orientation="h", y=1.12))
+                st.plotly_chart(fig_comp, width="stretch")
+
+            with c_der:
+                st.subheader("📈 Evolución Semanal de Cumplimiento (%)")
+                df_hist = df_sem[(df_sem["inicio_sab"] <= hoy_iso) & (pd.to_numeric(df_sem["cumplimiento_pct"], errors="coerce").notna())].sort_values("inicio_sab")
+                if not df_hist.empty:
+                    fig_evol = px.line(
+                        df_hist,
+                        x="inicio_sab",
+                        y="cumplimiento_pct",
+                        markers=True,
+                        labels={"inicio_sab": "Inicio Semana", "cumplimiento_pct": "Cumplimiento (%)"},
+                        title="Cumplimiento de molienda por semana"
+                    )
+                    fig_evol.add_hline(y=100, line_dash="dash", line_color="green", annotation_text="Objetivo 100%")
+                    st.plotly_chart(fig_evol, width="stretch")
+
+            st.markdown("---")
+
+            col_lab, col_ev = st.columns([1.4, 1])
+
+            with col_lab:
+                st.subheader("🧪 Calidad de Laboratorio (Promedio Semanal)")
+                df_lab_sem = df_lab[df_lab["inicio_sab"] == ini_sel].copy() if not df_lab.empty else pd.DataFrame()
+                if not df_lab_sem.empty:
+                    df_lab_show = df_lab_sem[["producto", "parametro", "criterio", "promedio", "desvio", "estado"]].copy()
+                    df_lab_show.columns = ["Producto", "Parámetro", "Criterio", "Promedio", "Desvío", "Estado"]
+                    st.dataframe(df_lab_show, hide_index=True, width="stretch")
+                else:
+                    st.info("Sin registros de laboratorio cargados para esta semana.")
+
+            with col_ev:
+                st.subheader("⚠️ Eventos No Programados")
+                df_ev_sem = df_ev[df_ev["inicio_sab"] == ini_sel].copy() if not df_ev.empty else pd.DataFrame()
+                if not df_ev_sem.empty:
+                    df_ev_show = df_ev_sem[["evento", "motivo", "minutos"]].copy()
+                    df_ev_show.columns = ["Evento", "Motivo", "Minutos"]
+                    st.dataframe(df_ev_show, hide_index=True, width="stretch")
+                else:
+                    st.success("Sin eventos no programados registrados en esta semana.")
+
+            st.markdown("---")
+            st.subheader("🌽 Subproductos, Pellet y Línea de Maíz")
+            s1, s2, s3, s4 = st.columns(4)
+            s1.metric("Pellet Subprod. Trigo", f"{float(sem.get('pellet_subprod_trigo_t') or 0):,.2f} t")
+            s2.metric("Pellet Total / Camiones", f"{float(sem.get('pellet_total_t') or 0):,.2f} t", f"{float(sem.get('camiones_pellet_total') or 0):.1f} camiones")
+            s3.metric("Maíz Molido", f"{float(sem.get('maiz_molido_t') or 0):,.2f} t")
+            s4.metric("Polenta / Harina Maíz", f"{float(sem.get('polenta_t') or 0):,.2f} t / {float(sem.get('harina_maiz_t') or 0):,.2f} t")
+
+    with tab_aumax:
+        render_seccion_aumax(supabase)
+        st.divider()
+        render_formulario_carga_manual(supabase)
+
+except Exception as e:
+    st.error(f"Error al conectar o renderizar datos: {e}")
