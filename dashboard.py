@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from datetime import datetime, timezone, timedelta
 from supabase import create_client
 
 # Configuración de página amplia
@@ -10,12 +11,16 @@ st.set_page_config(page_title="Dashboard Molino de Trigo", layout="wide", page_i
 # === CREDENCIALES DE SUPABASE ===
 SUPABASE_URL = "https://wyvnwrvumqpztsjyhcgx.supabase.co"
 SUPABASE_KEY = "sb_publishable_sXggrAG_UTWzoN_XPWL_fg_AW80e0Tc"
+TZ_AR = timezone(timedelta(hours=-3))
+
 
 @st.cache_resource(ttl=600)
 def init_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
 supabase = init_supabase()
+
 
 # === LECTURA DE DATOS DESDE SUPABASE ===
 def cargar_datos():
@@ -54,6 +59,7 @@ def cargar_datos():
 
     return df_cabecera, df_productos, df_paradas, df_acopio, df_sem, df_lab, df_ev
 
+
 def parsear_horas_a_decimal(val):
     if not val or str(val).lower() == 'none':
         return 0.0
@@ -66,6 +72,7 @@ def parsear_horas_a_decimal(val):
     except Exception:
         return 0.0
 
+
 def obtener_horas_netas_str(row):
     hn = row.get('horas_netas')
     if hn and str(hn).lower() not in ('none', 'nan', ''):
@@ -75,19 +82,234 @@ def obtener_horas_netas_str(row):
         return str(hm)
     return "08:00:00"
 
+
+# === MÓDULO D: SECCIÓN MOLINO AUMAX ===
+def render_seccion_aumax(supabase_client):
+    st.header("⚙️ Molino Aumax — Balanzas, Extracción y Recetas")
+
+    # ---------------------------------------------------------
+    # 1. CARGA DE DATOS DESDE SUPABASE
+    # ---------------------------------------------------------
+    q_ext = (
+        supabase_client.table("aumax_extraccion_instantanea")
+        .select("*")
+        .order("fecha_captura", desc=True)
+        .limit(200)
+        .execute()
+    )
+    df_ext = pd.DataFrame(q_ext.data or [])
+
+    q_tot = (
+        supabase_client.table("aumax_registros_totales")
+        .select("*")
+        .order("fecha_registro", desc=True)
+        .limit(50)
+        .execute()
+    )
+    df_tot = pd.DataFrame(q_tot.data or [])
+
+    q_corte = (
+        supabase_client.table("v_aumax_corte_00hs")
+        .select("*")
+        .order("fecha_corte", desc=True)
+        .limit(90)
+        .execute()
+    )
+    df_corte = pd.DataFrame(q_corte.data or [])
+
+    q_rec = (
+        supabase_client.table("aumax_diferencia_receta")
+        .select("*")
+        .order("fecha_evento_actual", desc=True)
+        .limit(500)
+        .execute()
+    )
+    df_rec_all = pd.DataFrame(q_rec.data or [])
+
+    # ---------------------------------------------------------
+    # 2. SISTEMA DE ALERTAS OPERATIVAS
+    # ---------------------------------------------------------
+    UMBRAL_EXTRACCION_MIN = 77.0  # Ajustar según objetivo de molienda
+    alertas = []
+
+    if not df_ext.empty:
+        ultima_ext = float(df_ext.iloc[0]["extraccion_pct"])
+        if ultima_ext < UMBRAL_EXTRACCION_MIN:
+            alertas.append(
+                f"📉 **Extracción baja detectada:** {ultima_ext:.2f}% (por debajo del objetivo de {UMBRAL_EXTRACCION_MIN:.1f}%)."
+            )
+
+    if not df_tot.empty:
+        df_tot["dt"] = pd.to_datetime(df_tot["fecha_registro"])
+        ultima_lectura = df_tot.iloc[0]["dt"].astimezone(TZ_AR)
+        ahora_ar = datetime.now(TZ_AR)
+        minutos_sin_datos = (ahora_ar - ultima_lectura).total_seconds() / 60.0
+
+        if minutos_sin_datos > 20:
+            alertas.append(
+                f"⏱️ **Sin lecturas recientes de Aumax:** última transmisión hace {int(minutos_sin_datos)} min ({ultima_lectura.strftime('%d/%m %H:%M')})."
+            )
+
+        # Verificar si el acumulador de trigo avanzó en los últimos ~30 min (10 registros)
+        if len(df_tot) >= 10:
+            trigo_actual = float(df_tot.iloc[0]["total_blz_ing_trg"] or 0)
+            trigo_hace_30m = float(df_tot.iloc[9]["total_blz_ing_trg"] or 0)
+            if trigo_actual == trigo_hace_30m:
+                alertas.append(
+                    "🛑 **Molino detenido / sin ingreso de trigo:** el acumulador de balanza de trigo no varió en los últimos 30 minutos."
+                )
+
+    if alertas:
+        for msg in alertas:
+            st.error(msg)
+    else:
+        st.success("✅ Operación Aumax normal: extracción dentro de parámetro y molienda activa.")
+
+    # ---------------------------------------------------------
+    # 3. KPIs INSTANTÁNEOS
+    # ---------------------------------------------------------
+    col1, col2, col3, col4 = st.columns(4)
+    ext_val = f"{df_ext.iloc[0]['extraccion_pct']:.2f}%" if not df_ext.empty else "S/D"
+    receta_act = df_tot.iloc[0]["receta_hab"] if not df_tot.empty else "S/D"
+    silo_act = f"Silo {df_tot.iloc[0]['silo_hab']}" if not df_tot.empty else "S/D"
+    hora_act = (
+        pd.to_datetime(df_tot.iloc[0]["fecha_registro"]).astimezone(TZ_AR).strftime("%d/%m %H:%M")
+        if not df_tot.empty
+        else "S/D"
+    )
+
+    col1.metric("Extracción Instantánea", ext_val)
+    col2.metric("Receta Activa", receta_act)
+    col3.metric("Silo Habilitado", silo_act)
+    col4.metric("Último Registro PLC", hora_act)
+
+    st.divider()
+
+    # ---------------------------------------------------------
+    # 4. FILTRO POR SEMANA OPERATIVA (SÁBADO A VIERNES)
+    # ---------------------------------------------------------
+    semanas_disp = sorted(
+        list(
+            set(
+                (df_corte["inicio_sab"].dropna().unique().tolist() if not df_corte.empty else [])
+                + (df_rec_all["inicio_sab"].dropna().unique().tolist() if not df_rec_all.empty else [])
+            )
+        ),
+        reverse=True,
+    )
+
+    opciones_sem = ["Todas (Últimos registros)"] + semanas_disp
+    sem_aumax_sel = st.selectbox(
+        "Filtrar por Semana Operativa Aumax (Inicio Sábado)",
+        opciones_sem,
+        key="filtro_semana_aumax",
+    )
+    semana_filtro = None if sem_aumax_sel == "Todas (Últimos registros)" else sem_aumax_sel
+
+    # ---------------------------------------------------------
+    # 5. CORTE DIARIO DE BALANZAS A LAS 00:00 (±3 MIN)
+    # ---------------------------------------------------------
+    st.subheader("🕛 Corte Diario de Balanzas a las 00:00 hs (±3 min)")
+    if not df_corte.empty:
+        if semana_filtro and "inicio_sab" in df_corte.columns:
+            df_corte_vista = df_corte[df_corte["inicio_sab"] == semana_filtro].copy()
+        else:
+            df_corte_vista = df_corte.head(14).copy()
+
+        if not df_corte_vista.empty:
+            df_corte_vista["hora_exacta_lectura"] = pd.to_datetime(
+                df_corte_vista["hora_exacta_lectura"]
+            ).dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            cols_mostrar = [
+                "fecha_corte",
+                "hora_exacta_lectura",
+                "receta_hab",
+                "silo_hab",
+                "total_blz_ing_trg",
+                "total_blz_4x0",
+                "total_blz_3x0",
+                "total_blz_afrch",
+                "kg_dia_trigo",
+                "kg_dia_4x0",
+                "kg_dia_3x0",
+                "kg_dia_afrechillo",
+            ]
+            cols_existentes = [c for c in cols_mostrar if c in df_corte_vista.columns]
+            st.dataframe(df_corte_vista[cols_existentes], width="stretch", hide_index=True)
+        else:
+            st.info("No hay cortes de medianoche registrados para la semana seleccionada.")
+    else:
+        st.info("Aún no hay registros de corte de medianoche en el rango consultado.")
+
+    st.divider()
+
+    # ---------------------------------------------------------
+    # 6. RENDIMIENTO Y KILOS NETOS POR RECETA
+    # ---------------------------------------------------------
+    st.subheader("📊 Producción Neta por Cambio de Receta")
+    if not df_rec_all.empty:
+        df_rec = (
+            df_rec_all[df_rec_all["inicio_sab"] == semana_filtro].copy()
+            if semana_filtro
+            else df_rec_all.copy()
+        )
+
+        if not df_rec.empty:
+            resumen_receta = (
+                df_rec.groupby("receta_anterior", as_index=False)[
+                    ["diff_blz_ing_trg", "diff_blz_4x0", "diff_blz_3x0", "diff_blz_afrch"]
+                ]
+                .sum()
+                .rename(
+                    columns={
+                        "receta_anterior": "Receta",
+                        "diff_blz_ing_trg": "Trigo (kg)",
+                        "diff_blz_4x0": "Harina 0000 (kg)",
+                        "diff_blz_3x0": "Harina 000 (kg)",
+                        "diff_blz_afrch": "Afrechillo (kg)",
+                    }
+                )
+            )
+            resumen_receta["Extracción Real (%)"] = (
+                (resumen_receta["Harina 0000 (kg)"] + resumen_receta["Harina 000 (kg)"])
+                / resumen_receta["Trigo (kg)"].replace(0, pd.NA)
+                * 100
+            ).round(2)
+
+            c1, c2 = st.columns([1.2, 1])
+            with c1:
+                st.dataframe(resumen_receta, width="stretch", hide_index=True)
+            with c2:
+                fig = px.bar(
+                    resumen_receta,
+                    x="Receta",
+                    y=["Harina 0000 (kg)", "Harina 000 (kg)", "Afrechillo (kg)"],
+                    barmode="stack",
+                    title="Distribución de Productos por Receta (kg)",
+                )
+                st.plotly_chart(fig, width="stretch")
+        else:
+            st.info("No hay cambios de receta registrados para la semana seleccionada.")
+    else:
+        st.info("Aún no hay datos de diferencia por receta sincronizados.")
+
+
+# === INTERFAZ PRINCIPAL ===
 st.title("🌾 Dashboard de Producción - Molino de Trigo")
 
-if st.sidebar.button("🔄 Actualizar Datos", use_container_width=True):
+if st.sidebar.button("🔄 Actualizar Datos", width="stretch"):
     st.cache_resource.clear()
     st.rerun()
 
 try:
     df_cabecera, df_productos, df_paradas, df_acopio, df_sem, df_lab, df_ev = cargar_datos()
 
-    tab_diario, tab_acopio, tab_semanal = st.tabs([
+    tab_diario, tab_acopio, tab_semanal, tab_aumax = st.tabs([
         "🏭 Producción Diaria & Turnos",
         "🌾 Stock Planta Acopio (Silos)",
-        "📊 Gestión Semanal (Plan vs Real · Envasado · Laboratorio)"
+        "📊 Gestión Semanal (Plan vs Real · Envasado · Laboratorio)",
+        "⚙️ Molino Aumax (Balanzas & Recetas)",
     ])
 
     # =========================================================================
@@ -144,7 +366,7 @@ try:
                     lambda x: f"{float(x)*100:.2f}%" if pd.notna(x) and float(x) <= 1 else f"{float(x or 0):.2f}%"
                 )
                 df_turnos_tabla.columns = ['Turno', 'Responsable', 'Hs. Marcha Netas', 'Kgs Producidos', '% Extracción']
-                st.dataframe(df_turnos_tabla, hide_index=True, use_container_width=True)
+                st.dataframe(df_turnos_tabla, hide_index=True, width="stretch")
 
             with col_res_der:
                 st.subheader("📦 Acumulado por Producto en el Día (Kg)")
@@ -161,7 +383,7 @@ try:
                     )
                     fig_dia_barras.update_traces(texttemplate='%{text:,.0f} kg', textposition='outside')
                     fig_dia_barras.update_layout(showlegend=False)
-                    st.plotly_chart(fig_dia_barras, use_container_width=True)
+                    st.plotly_chart(fig_dia_barras, width="stretch")
                 else:
                     st.info("Sin desglose de productos acumulado para este día.")
 
@@ -207,7 +429,7 @@ try:
                         title=f"Cantidad producida - {turno_sel}"
                     )
                     fig_barras.update_traces(texttemplate='%{text:,.0f} kg', textposition='outside')
-                    st.plotly_chart(fig_barras, use_container_width=True)
+                    st.plotly_chart(fig_barras, width="stretch")
                 else:
                     st.info("No hay desglose de productos para este turno.")
 
@@ -221,7 +443,7 @@ try:
                         hole=0.4,
                         title=f"Participación por producto - {turno_sel}"
                     )
-                    st.plotly_chart(fig_torta, use_container_width=True)
+                    st.plotly_chart(fig_torta, width="stretch")
                 else:
                     st.info("No hay porcentajes registrados para este turno.")
 
@@ -230,7 +452,7 @@ try:
                 df_tabla = df_prod_actual[['producto', 'cantidad_kg', 'porcentaje']].copy()
                 df_tabla['cantidad_kg'] = df_tabla['cantidad_kg'].apply(lambda x: f"{int(x):,} kg" if float(x).is_integer() else f"{x:,.2f} kg")
                 df_tabla['porcentaje'] = df_tabla['porcentaje'].apply(lambda x: f"{x*100:.2f}%" if x <= 1 else f"{x:.2f}%")
-                st.dataframe(df_tabla, hide_index=True, use_container_width=True)
+                st.dataframe(df_tabla, hide_index=True, width="stretch")
 
             st.markdown("---")
             st.subheader(f"⏱️ Registro de Paradas - Turno {turno_sel}")
@@ -238,7 +460,7 @@ try:
             if not df_paradas.empty and 'registro_id' in df_paradas.columns:
                 df_paradas_actual = df_paradas[df_paradas['registro_id'] == registro_id]
                 if not df_paradas_actual.empty:
-                    st.dataframe(df_paradas_actual[['motivo', 'detalle', 'horas_parada']], hide_index=True, use_container_width=True)
+                    st.dataframe(df_paradas_actual[['motivo', 'detalle', 'horas_parada']], hide_index=True, width="stretch")
                 else:
                     st.success("No se registraron paradas de planta en este turno.")
             else:
@@ -287,7 +509,7 @@ try:
                     title=f"Distribución por Silo ({corte_sel})"
                 )
                 fig_silos.update_traces(texttemplate="%{text:,.1f} t", textposition="outside")
-                st.plotly_chart(fig_silos, use_container_width=True)
+                st.plotly_chart(fig_silos, width="stretch")
 
             with col_ac_der:
                 st.subheader("🌾 Participación por Grano")
@@ -299,13 +521,13 @@ try:
                     hole=0.4,
                     title="Proporción de stock por grano"
                 )
-                st.plotly_chart(fig_grano, use_container_width=True)
+                st.plotly_chart(fig_grano, width="stretch")
 
             st.subheader("📋 Detalle de Silos del Corte")
             df_acopio_tabla = df_corte[["silo", "grano", "toneladas"]].copy()
             df_acopio_tabla["toneladas"] = df_acopio_tabla["toneladas"].apply(lambda x: f"{x:,.2f} t")
             df_acopio_tabla.columns = ["Silo", "Grano / Calidad", "Stock (t)"]
-            st.dataframe(df_acopio_tabla, hide_index=True, use_container_width=True)
+            st.dataframe(df_acopio_tabla, hide_index=True, width="stretch")
 
     # =========================================================================
     # PESTAÑA 3: GESTIÓN SEMANAL (KAN BAN PLANIFICACIÓN)
@@ -396,7 +618,7 @@ try:
                     go.Bar(name="Envasado Real (t)", x=productos_comp, y=env_vals),
                 ])
                 fig_comp.update_layout(barmode="group", yaxis_title="Toneladas (t)", legend=dict(orientation="h", y=1.12))
-                st.plotly_chart(fig_comp, use_container_width=True)
+                st.plotly_chart(fig_comp, width="stretch")
 
             with c_der:
                 st.subheader("📈 Evolución Semanal de Cumplimiento (%)")
@@ -411,7 +633,7 @@ try:
                         title="Cumplimiento de molienda por semana"
                     )
                     fig_evol.add_hline(y=100, line_dash="dash", line_color="green", annotation_text="Objetivo 100%")
-                    st.plotly_chart(fig_evol, use_container_width=True)
+                    st.plotly_chart(fig_evol, width="stretch")
 
             st.markdown("---")
 
@@ -423,7 +645,7 @@ try:
                 if not df_lab_sem.empty:
                     df_lab_show = df_lab_sem[["producto", "parametro", "criterio", "promedio", "desvio", "estado"]].copy()
                     df_lab_show.columns = ["Producto", "Parámetro", "Criterio", "Promedio", "Desvío", "Estado"]
-                    st.dataframe(df_lab_show, hide_index=True, use_container_width=True)
+                    st.dataframe(df_lab_show, hide_index=True, width="stretch")
                 else:
                     st.info("Sin registros de laboratorio cargados para esta semana.")
 
@@ -433,7 +655,7 @@ try:
                 if not df_ev_sem.empty:
                     df_ev_show = df_ev_sem[["evento", "motivo", "minutos"]].copy()
                     df_ev_show.columns = ["Evento", "Motivo", "Minutos"]
-                    st.dataframe(df_ev_show, hide_index=True, use_container_width=True)
+                    st.dataframe(df_ev_show, hide_index=True, width="stretch")
                 else:
                     st.success("Sin eventos no programados registrados en esta semana.")
 
@@ -444,6 +666,12 @@ try:
             s2.metric("Pellet Total / Camiones", f"{float(sem.get('pellet_total_t') or 0):,.2f} t", f"{float(sem.get('camiones_pellet_total') or 0):.1f} camiones")
             s3.metric("Maíz Molido", f"{float(sem.get('maiz_molido_t') or 0):,.2f} t")
             s4.metric("Polenta / Harina Maíz", f"{float(sem.get('polenta_t') or 0):,.2f} t / {float(sem.get('harina_maiz_t') or 0):,.2f} t")
+
+    # =========================================================================
+    # PESTAÑA 4: MOLINO AUMAX (BALANZAS, EXTRACCIÓN Y RECETAS)
+    # =========================================================================
+    with tab_aumax:
+        render_seccion_aumax(supabase)
 
 except Exception as e:
     st.error(f"Error al conectar o renderizar datos: {e}")
