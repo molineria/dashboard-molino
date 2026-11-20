@@ -158,7 +158,7 @@ def render_seccion_aumax(supabase_client):
 
         if minutos_sin_datos > 20:
             alertas.append(
-                f"⏱️ **Sin lecturas recientes de caudales:** última transmisión hace {int(minutos_sin_datos)} min ({ultima_lectura.strftime('%d/%m %H:%M')})."
+                f"⏱️ **Sin lecturas recientes de caudales:** última transmisión hace {} min ({ultima_lectura.strftime('%d/%m %H:%M')})."
             )
 
         if float(df_caud.iloc[0].get("caudal_ing_trg") or 0) <= 0:
