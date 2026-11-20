@@ -1,4 +1,7 @@
-import streamlit as st
+@'
+import pathlib
+
+codigo = '''import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -78,6 +81,11 @@ def obtener_horas_netas_str(row):
     if hm and str(hm).lower() not in ("none", "nan", ""):
         return str(hm)
     return "08:00:00"
+
+
+def fmt_kg(val):
+    num = float(pd.to_numeric(val, errors="coerce") or 0.0)
+    return f"{int(num):,} kg" if num.is_integer() else f"{num:,.2f} kg"
 
 
 def render_seccion_aumax(supabase_client):
@@ -396,7 +404,7 @@ try:
             st.header(f"📅 Resumen Consolidado del Día ({fecha_sel})")
             cant_turnos = len(df_fecha)
             kgs_dia = pd.to_numeric(df_fecha["kgs_totales_producidos"], errors="coerce").fillna(0).sum()
-            kgs_dia_str = f"{int(kgs_dia):,} kg" if float(kgs_dia).is_integer() else f"{kgs_dia:,.2f} kg"
+            kgs_dia_str = fmt_kg(kgs_dia)
 
             ext_series = pd.to_numeric(df_fecha["porcentaje_extraccion"], errors="coerce").fillna(0)
             ext_prom_dia = ext_series.apply(lambda x: x * 100 if x <= 1 else x).mean() if not ext_series.empty else 0.0
@@ -415,11 +423,9 @@ try:
             with col_res_izq:
                 st.subheader("⏱️ Comparativa por Turno")
                 df_t = df_fecha[["turno", "responsable", "hs_netas_efectivas", "kgs_totales_producidos", "porcentaje_extraccion"]].copy()
-                df_t["kgs_totales_producidos"] = df_t["kgs_totales_producidos"].apply(
-                    lambda x: f"{int(x):,} kg" if pd.notna(x) and float(x).is_integer() else f"{float(x or 0):,.2f} kg"
-                )
+                df_t["kgs_totales_producidos"] = df_t["kgs_totales_producidos"].apply(fmt_kg)
                 df_t["porcentaje_extraccion"] = df_t["porcentaje_extraccion"].apply(
-                    lambda x: f"{float(x)*100:.2f}%" if pd.notna(x) and float(x) <= 1 else f"{float(x or 0):.2f}%"
+                    lambda x: f"{float(x)*100:.2f}%" if pd.notna(x) and float(x) <= 1 else f"{float(pd.to_numeric(x, errors='coerce') or 0):.2f}%"
                 )
                 df_t.columns = ["Turno", "Responsable", "Hs. Marcha Netas", "Kgs Producidos", "% Extracción"]
                 st.dataframe(df_t, hide_index=True, width="stretch")
@@ -441,9 +447,8 @@ try:
 
             reg = df_fecha[df_fecha["turno"] == turno_sel].iloc[0]
             reg_id = reg["id"]
-            kgs_tot = reg.get("kgs_totales_producidos", 0) or 0
-            kgs_str = f"{int(kgs_tot):,} kg" if float(kgs_tot).is_integer() else f"{kgs_tot:,.2f} kg"
-            ext_v = float(reg.get("porcentaje_extraccion", 0) or 0)
+            kgs_str = fmt_kg(reg.get("kgs_totales_producidos"))
+            ext_v = float(pd.to_numeric(reg.get("porcentaje_extraccion"), errors="coerce") or 0)
             ext_s = f"{ext_v * 100:.2f}%" if ext_v <= 1 else f"{ext_v:.2f}%"
 
             c1, c2, c3, c4, c5 = st.columns(5)
@@ -518,7 +523,7 @@ try:
 
             def fmt_sem(row):
                 ini, fin = str(row["inicio_sab"]), str(row["fin_vie"])
-                dias = float(row.get("dias_dato_real") or 0)
+                dias = float(pd.to_numeric(row.get("dias_dato_real"), errors="coerce") or 0)
                 est = f"🟢 En curso ({dias:g}d)" if ini <= hoy_iso <= fin else ("📅 Futura" if ini > hoy_iso else f"✅ Cerrada ({dias:g}d)")
                 return f"Sáb {pd.to_datetime(ini).strftime('%d/%m/%Y')} al Vie {pd.to_datetime(fin).strftime('%d/%m/%Y')} — {est}"
 
@@ -529,11 +534,11 @@ try:
             ini_sel = sem["inicio_sab"]
 
             m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Trigo Molido / Obj.", f"{float(sem.get('trigo_molido_t') or 0):,.1f} t", f"{float(sem.get('cumplimiento_pct') or 0):.1f}%")
-            m2.metric("Horas Reales", f"{float(sem.get('horas_reales_h') or 0):,.1f} h", f"Plan: {float(sem.get('horas_plan_h') or 0):,.1f} h")
-            m3.metric("Extracción Real", f"{float(sem.get('extraccion_real_pct') or 0):.2f}%")
-            m4.metric("Total Envasado", f"{float(sem.get('envasado_total_t') or 0):,.2f} t")
-            m5.metric("Pallets Reales", f"{int(float(sem.get('pallets_reales_total') or 0)):,} plts")
+            m1.metric("Trigo Molido / Obj.", f"{float(pd.to_numeric(sem.get('trigo_molido_t'), errors='coerce') or 0):,.1f} t", f"{float(pd.to_numeric(sem.get('cumplimiento_pct'), errors='coerce') or 0):.1f}%")
+            m2.metric("Horas Reales", f"{float(pd.to_numeric(sem.get('horas_reales_h'), errors='coerce') or 0):,.1f} h", f"Plan: {float(pd.to_numeric(sem.get('horas_plan_h'), errors='coerce') or 0):,.1f} h")
+            m3.metric("Extracción Real", f"{float(pd.to_numeric(sem.get('extraccion_real_pct'), errors='coerce') or 0):.2f}%")
+            m4.metric("Total Envasado", f"{float(pd.to_numeric(sem.get('envasado_total_t'), errors='coerce') or 0):,.2f} t")
+            m5.metric("Pallets Reales", f"{int(float(pd.to_numeric(sem.get('pallets_reales_total'), errors='coerce') or 0)):,} plts")
 
             col_l, col_e = st.columns([1.4, 1])
             with col_l:
@@ -549,12 +554,4 @@ try:
                 if not df_es.empty:
                     st.dataframe(df_es[["evento", "motivo", "minutos"]], hide_index=True, width="stretch")
                 else:
-                    st.success("Sin eventos no programados en esta semana.")
-
-    with tab_aumax:
-        render_seccion_aumax(supabase)
-        st.divider()
-        render_formulario_carga_manual(supabase)
-
-except Exception as e:
-    st.error(f"Error al conectar o renderizar datos: {e}")
+                    st.success
