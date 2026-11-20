@@ -5,7 +5,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timezone, timedelta
-from supabase import create_client
+from supabas
+e import create_client
 
 st.set_page_config(page_title="Dashboard Molino de Trigo", layout="wide", page_icon="🌾")
 
