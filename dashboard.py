@@ -1,10 +1,11 @@
-import streamlit as st
+import pathlib
+
+codigo = '''import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timezone, timedelta
-from supaba
-se import create_client
+from supabase import create_client
 
 st.set_page_config(page_title="Dashboard Molino de Trigo", layout="wide", page_icon="🌾")
 
@@ -153,13 +154,15 @@ def render_seccion_aumax(supabase_client):
         )
 
     if not df_caud.empty:
+        df_caud = df_caud.dropna(subset=["fecha_captura"]).copy()
+    if not df_caud.empty:
         df_caud["dt"] = pd.to_datetime(df_caud["fecha_captura"], format="ISO8601", utc=True)
         ultima_lectura = df_caud.iloc[0]["dt"].astimezone(TZ_AR)
         minutos_sin_datos = (datetime.now(TZ_AR) - ultima_lectura).total_seconds() / 60.0
 
-        if minutos_sin_datos > 20:
+        if pd.notna(minutos_sin_datos) and minutos_sin_datos > 20:
             alertas.append(
-                f"⏱️ **Sin lecturas recientes de caudales:** última transmisión hace {} min ({ultima_lectura.strftime('%d/%m %H:%M')})."
+                f"⏱️ **Sin lecturas recientes de caudales:** última transmisión hace {int(minutos_sin_datos)} min ({ultima_lectura.strftime('%d/%m %H:%M')})."
             )
 
         if float(df_caud.iloc[0].get("caudal_ing_trg") or 0) <= 0:
@@ -561,3 +564,7 @@ try:
 
 except Exception as e:
     st.error(f"Error al conectar o renderizar datos: {e}")
+'''
+
+pathlib.Path("dashboard.py").write_text(codigo, encoding="utf-8")
+print("OK - dashboard.py generado sin cortes.")
