@@ -85,13 +85,28 @@ def obtener_horas_netas_str(row):
 
 # === MÓDULO D: SECCIÓN MOLINO AUMAX ===
 def render_seccion_aumax(supabase_client):
-    st.header("⚙️ Molino Aumax — Balanzas, Extracción y Recetas")
+    st.header("⚙️ Molino Aumax — Caudales en Vivo, Balanzas y Recetas")
+
+    # ---------------------------------------------------------
+    # 1. CARGA DE DATOS DESDE SUPABASE
+    # ---------------------------------------------------------
+    try:
+        q_caud = (
+            supabase_client.table("aumax_registro_caudales")
+            .select("*")
+            .order("fecha_captura", desc=True)
+            .limit(300)
+            .execute()
+        )
+        df_caud = pd.DataFrame(q_caud.data or [])
+    except Exception:
+        df_caud = pd.DataFrame()
 
     q_ext = (
         supabase_client.table("aumax_extraccion_instantanea")
         .select("*")
         .order("fecha_captura", desc=True)
-        .limit(200)
+        .limit(50)
         .execute()
     )
     df_ext = pd.DataFrame(q_ext.data or [])
@@ -123,58 +138,111 @@ def render_seccion_aumax(supabase_client):
     )
     df_rec_all = pd.DataFrame(q_rec.data or [])
 
+    # ---------------------------------------------------------
+    # 2. SISTEMA DE ALERTAS OPERATIVAS BASADO EN CAUDALES
+    # ---------------------------------------------------------
     UMBRAL_EXTRACCION_MIN = 77.0
     alertas = []
 
     if not df_ext.empty:
         ultima_ext = float(df_ext.iloc[0]["extraccion_pct"])
-        if ultima_ext < UMBRAL_EXTRACCION_MIN:
-            alertas.append(
-                f"📉 **Extracción baja detectada:** {ultima_ext:.2f}% (por debajo del objetivo de {UMBRAL_EXTRACCION_MIN:.1f}%)."
-            )
+    elif not df_caud.empty:
+        ultima_ext = float(df_caud.iloc[0].get("extraccion_pct") or 0)
+    else:
+        ultima_ext = None
 
-    if not df_tot.empty:
-        df_tot["dt"] = pd.to_datetime(df_tot["fecha_registro"])
-        ultima_lectura = df_tot.iloc[0]["dt"].astimezone(TZ_AR)
+    if ultima_ext is not None and ultima_ext > 0 and ultima_ext < UMBRAL_EXTRACCION_MIN:
+        alertas.append(
+            f"📉 **Extracción baja detectada:** {ultima_ext:.2f}% (por debajo del objetivo de {UMBRAL_EXTRACCION_MIN:.1f}%)."
+        )
+
+    if not df_caud.empty:
+        df_caud["dt"] = pd.to_datetime(df_caud["fecha_captura"])
+        ultima_lectura = df_caud.iloc[0]["dt"].astimezone(TZ_AR)
         ahora_ar = datetime.now(TZ_AR)
         minutos_sin_datos = (ahora_ar - ultima_lectura).total_seconds() / 60.0
 
         if minutos_sin_datos > 20:
             alertas.append(
-                f"⏱️ **Sin lecturas recientes de Aumax:** última transmisión hace {int(minutos_sin_datos)} min ({ultima_lectura.strftime('%d/%m %H:%M')})."
+                f"⏱️ **Sin lecturas recientes de caudales:** última transmisión hace {int(minutos_sin_datos)} min ({ultima_lectura.strftime('%d/%m %H:%M')})."
             )
 
-        if len(df_tot) >= 10:
-            trigo_actual = float(df_tot.iloc[0]["total_blz_ing_trg"] or 0)
-            trigo_hace_30m = float(df_tot.iloc[9]["total_blz_ing_trg"] or 0)
-            if trigo_actual == trigo_hace_30m:
-                alertas.append(
-                    "🛑 **Molino detenido / sin ingreso de trigo:** el acumulador de balanza de trigo no varió en los últimos 30 minutos."
-                )
+        caudal_trigo_act = float(df_caud.iloc[0].get("caudal_ing_trg") or 0)
+        if caudal_trigo_act <= 0:
+            alertas.append(
+                "🛑 **Molino detenido / sin caudal de ingreso de trigo:** Caudal IngTrig en 0 kg/h."
+            )
+    elif not df_tot.empty:
+        df_tot["dt"] = pd.to_datetime(df_tot["fecha_registro"])
+        ultima_lectura = df_tot.iloc[0]["dt"].astimezone(TZ_AR)
+        ahora_ar = datetime.now(TZ_AR)
+        minutos_sin_datos = (ahora_ar - ultima_lectura).total_seconds() / 60.0
+        if minutos_sin_datos > 20:
+            alertas.append(
+                f"⏱️ **Sin lecturas recientes de Aumax:** última transmisión hace {int(minutos_sin_datos)} min ({ultima_lectura.strftime('%d/%m %H:%M')})."
+            )
 
     if alertas:
         for msg in alertas:
             st.error(msg)
     else:
-        st.success("✅ Operación Aumax normal: extracción dentro de parámetro y molienda activa.")
+        st.success("✅ Operación Aumax normal: molino en marcha con caudal activo y extracción dentro de parámetro.")
 
+    # ---------------------------------------------------------
+    # 3. KPIs INSTANTÁNEOS Y CAUDALES EN VIVO
+    # ---------------------------------------------------------
     col1, col2, col3, col4 = st.columns(4)
-    ext_val = f"{df_ext.iloc[0]['extraccion_pct']:.2f}%" if not df_ext.empty else "S/D"
+    ext_val = f"{ultima_ext:.2f}%" if ultima_ext is not None else "S/D"
     receta_act = df_tot.iloc[0]["receta_hab"] if not df_tot.empty else "S/D"
     silo_act = f"Silo {df_tot.iloc[0]['silo_hab']}" if not df_tot.empty else "S/D"
-    hora_act = (
-        pd.to_datetime(df_tot.iloc[0]["fecha_registro"]).astimezone(TZ_AR).strftime("%d/%m %H:%M")
-        if not df_tot.empty
-        else "S/D"
-    )
+
+    if not df_caud.empty:
+        hora_act = pd.to_datetime(df_caud.iloc[0]["fecha_captura"]).astimezone(TZ_AR).strftime("%d/%m %H:%M")
+    elif not df_tot.empty:
+        hora_act = pd.to_datetime(df_tot.iloc[0]["fecha_registro"]).astimezone(TZ_AR).strftime("%d/%m %H:%M")
+    else:
+        hora_act = "S/D"
 
     col1.metric("Extracción Instantánea", ext_val)
     col2.metric("Receta Activa", receta_act)
     col3.metric("Silo Habilitado", silo_act)
-    col4.metric("Último Registro PLC", hora_act)
+    col4.metric("Último Registro Caudales", hora_act)
+
+    if not df_caud.empty:
+        st.subheader("🌊 Registro de Caudales Instantáneos (kg/h)")
+        ult_c = df_caud.iloc[0]
+        c_k1, c_k2, c_k3, c_k4, c_k5, c_k6 = st.columns(6)
+        c_k1.metric("Caudal IngTrig", f"{float(ult_c.get('caudal_ing_trg') or 0):,.2f}")
+        c_k2.metric("Caudal 3x0", f"{float(ult_c.get('caudal_3x0') or 0):,.2f}")
+        c_k3.metric("Caudal 4x0", f"{float(ult_c.get('caudal_4x0') or 0):,.2f}")
+        c_k4.metric("Caudal Afrechillo", f"{float(ult_c.get('caudal_afrechillo') or 0):,.2f}")
+        c_k5.metric("Caudal Semolín", f"{float(ult_c.get('caudal_semolin') or 0):,.2f}")
+        c_k6.metric("Caudal BIIr", f"{float(ult_c.get('caudal_bllr') or 0):,.2f}")
+
+        df_caud_plot = df_caud.copy()
+        df_caud_plot["hora_ar"] = pd.to_datetime(df_caud_plot["fecha_captura"]).dt.tz_convert(TZ_AR)
+        df_caud_plot = df_caud_plot.sort_values("hora_ar")
+
+        fig_caud = go.Figure()
+        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["caudal_ing_trg"], name="IngTrig"))
+        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["caudal_3x0"], name="3x0"))
+        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["caudal_4x0"], name="4x0"))
+        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["caudal_afrechillo"], name="Afrechillo"))
+        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["caudal_semolin"], name="Semolín"))
+        fig_caud.update_layout(
+            title="Curva de Caudales en Tiempo Real (kg/h)",
+            xaxis_title="Hora (Planta)",
+            yaxis_title="Caudal (kg/h)",
+            legend=dict(orientation="h", y=1.12),
+            height=350,
+        )
+        st.plotly_chart(fig_caud, width="stretch")
 
     st.divider()
 
+    # ---------------------------------------------------------
+    # 4. FILTRO POR SEMANA OPERATIVA (SÁBADO A VIERNES)
+    # ---------------------------------------------------------
     semanas_disp = sorted(
         list(
             set(
@@ -193,6 +261,9 @@ def render_seccion_aumax(supabase_client):
     )
     semana_filtro = None if sem_aumax_sel == "Todas (Últimos registros)" else sem_aumax_sel
 
+    # ---------------------------------------------------------
+    # 5. CORTE DIARIO DE BALANZAS A LAS 00:00 (±3 MIN)
+    # ---------------------------------------------------------
     st.subheader("🕛 Corte Diario de Balanzas a las 00:00 hs (±3 min)")
     if not df_corte.empty:
         if semana_filtro and "inicio_sab" in df_corte.columns:
@@ -228,6 +299,9 @@ def render_seccion_aumax(supabase_client):
 
     st.divider()
 
+    # ---------------------------------------------------------
+    # 6. RENDIMIENTO Y KILOS NETOS POR RECETA
+    # ---------------------------------------------------------
     st.subheader("📊 Producción Neta por Cambio de Receta")
     if not df_rec_all.empty:
         df_rec = (
