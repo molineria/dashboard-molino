@@ -1,7 +1,4 @@
-@'
-import pathlib
-
-codigo = '''import streamlit as st
+import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -554,4 +551,12 @@ try:
                 if not df_es.empty:
                     st.dataframe(df_es[["evento", "motivo", "minutos"]], hide_index=True, width="stretch")
                 else:
-                    st.success
+                    st.success("Sin eventos no programados en esta semana.")
+
+    with tab_aumax:
+        render_seccion_aumax(supabase)
+        st.divider()
+        render_formulario_carga_manual(supabase)
+
+except Exception as e:
+    st.error(f"Error al conectar o renderizar datos: {e}")
