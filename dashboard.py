@@ -157,7 +157,7 @@ def render_seccion_aumax(supabase_client):
         )
 
     if not df_caud.empty:
-        df_caud["dt"] = pd.to_datetime(df_caud["fecha_captura"])
+        df_caud["dt"] = pd.to_datetime(df_caud["fecha_captura"], format="ISO8601", utc=True)
         ultima_lectura = df_caud.iloc[0]["dt"].astimezone(TZ_AR)
         ahora_ar = datetime.now(TZ_AR)
         minutos_sin_datos = (ahora_ar - ultima_lectura).total_seconds() / 60.0
@@ -173,7 +173,7 @@ def render_seccion_aumax(supabase_client):
                 "🛑 **Molino detenido / sin caudal de ingreso de trigo:** Caudal IngTrig en 0 kg/h."
             )
     elif not df_tot.empty:
-        df_tot["dt"] = pd.to_datetime(df_tot["fecha_registro"])
+        df_tot["dt"] = pd.to_datetime(df_tot["fecha_registro"], format="ISO8601", utc=True)
         ultima_lectura = df_tot.iloc[0]["dt"].astimezone(TZ_AR)
         ahora_ar = datetime.now(TZ_AR)
         minutos_sin_datos = (ahora_ar - ultima_lectura).total_seconds() / 60.0
@@ -197,9 +197,9 @@ def render_seccion_aumax(supabase_client):
     silo_act = f"Silo {df_tot.iloc[0]['silo_hab']}" if not df_tot.empty else "S/D"
 
     if not df_caud.empty:
-        hora_act = pd.to_datetime(df_caud.iloc[0]["fecha_captura"]).astimezone(TZ_AR).strftime("%d/%m %H:%M")
+        hora_act = pd.to_datetime(df_caud.iloc[0]["fecha_captura"], format="ISO8601", utc=True).astimezone(TZ_AR).strftime("%d/%m %H:%M")
     elif not df_tot.empty:
-        hora_act = pd.to_datetime(df_tot.iloc[0]["fecha_registro"]).astimezone(TZ_AR).strftime("%d/%m %H:%M")
+        hora_act = pd.to_datetime(df_tot.iloc[0]["fecha_registro"], format="ISO8601", utc=True).astimezone(TZ_AR).strftime("%d/%m %H:%M")
     else:
         hora_act = "S/D"
 
@@ -220,7 +220,7 @@ def render_seccion_aumax(supabase_client):
         c_k6.metric("Caudal BIIr", f"{float(ult_c.get('caudal_bllr') or 0):,.2f}")
 
         df_caud_plot = df_caud.copy()
-        df_caud_plot["hora_ar"] = pd.to_datetime(df_caud_plot["fecha_captura"]).dt.tz_convert(TZ_AR)
+        df_caud_plot["hora_ar"] = pd.to_datetime(df_caud_plot["fecha_captura"], format="ISO8601", utc=True).dt.tz_convert(TZ_AR)
         df_caud_plot = df_caud_plot.sort_values("hora_ar")
 
         fig_caud = go.Figure()
@@ -273,7 +273,7 @@ def render_seccion_aumax(supabase_client):
 
         if not df_corte_vista.empty:
             df_corte_vista["hora_exacta_lectura"] = pd.to_datetime(
-                df_corte_vista["hora_exacta_lectura"]
+                df_corte_vista["hora_exacta_lectura"], format="ISO8601"
             ).dt.strftime("%Y-%m-%d %H:%M:%S")
 
             cols_mostrar = [
@@ -568,308 +568,4 @@ try:
                     lambda x: f"{int(x):,} kg" if pd.notna(x) and float(x).is_integer() else f"{float(x or 0):,.2f} kg"
                 )
                 df_turnos_tabla['porcentaje_extraccion'] = df_turnos_tabla['porcentaje_extraccion'].apply(
-                    lambda x: f"{float(x)*100:.2f}%" if pd.notna(x) and float(x) <= 1 else f"{float(x or 0):.2f}%"
-                )
-                df_turnos_tabla.columns = ['Turno', 'Responsable', 'Hs. Marcha Netas', 'Kgs Producidos', '% Extracción']
-                st.dataframe(df_turnos_tabla, hide_index=True, width="stretch")
-
-            with col_res_der:
-                st.subheader("📦 Acumulado por Producto en el Día (Kg)")
-                if not df_prod_dia.empty:
-                    df_acum_prod = df_prod_dia.groupby('producto', as_index=False)['cantidad_kg'].sum()
-                    fig_dia_barras = px.bar(
-                        df_acum_prod,
-                        x='producto',
-                        y='cantidad_kg',
-                        text='cantidad_kg',
-                        color='producto',
-                        labels={'cantidad_kg': 'Kilogramos Totales', 'producto': 'Producto'},
-                        title="Total diario producido por variedad"
-                    )
-                    fig_dia_barras.update_traces(texttemplate='%{text:,.0f} kg', textposition='outside')
-                    fig_dia_barras.update_layout(showlegend=False)
-                    st.plotly_chart(fig_dia_barras, width="stretch")
-                else:
-                    st.info("Sin desglose de productos acumulado para este día.")
-
-            st.markdown("---")
-
-            turnos_disponibles = df_fecha['turno'].unique().tolist()
-            turno_sel = st.sidebar.selectbox("Seleccionar Turno (Detalle)", turnos_disponibles)
-
-            st.header(f"🔍 Detalle del Turno: {turno_sel}")
-
-            registro_actual = df_fecha[df_fecha['turno'] == turno_sel].iloc[0]
-            registro_id = registro_actual['id']
-
-            kgs_totales = registro_actual.get('kgs_totales_producidos', 0) or 0
-            kgs_str = f"{int(kgs_totales):,} kg" if float(kgs_totales).is_integer() else f"{kgs_totales:,.2f} kg"
-
-            ext_val = float(registro_actual.get('porcentaje_extraccion', 0) or 0)
-            ext_str = f"{ext_val * 100:.2f}%" if ext_val <= 1 else f"{ext_val:.2f}%"
-
-            hm_str = obtener_horas_netas_str(registro_actual)
-
-            col1, col2, col3, col4, col5 = st.columns(5)
-            col1.metric("Responsable", registro_actual.get('responsable', 'N/A'))
-            col2.metric("Turno", registro_actual.get('turno', 'N/A'))
-            col3.metric("Hs. Marcha Netas", hm_str)
-            col4.metric("Kgs Totales", kgs_str)
-            col5.metric("% Extracción", ext_str)
-
-            df_prod_actual = df_productos[df_productos['registro_id'] == registro_id].copy() if not df_productos.empty else pd.DataFrame()
-
-            col_left, col_right = st.columns(2)
-
-            with col_left:
-                st.subheader("📦 Producción del Turno (Kg)")
-                if not df_prod_actual.empty:
-                    fig_barras = px.bar(
-                        df_prod_actual,
-                        x='producto',
-                        y='cantidad_kg',
-                        text='cantidad_kg',
-                        color='producto',
-                        labels={'cantidad_kg': 'Kilogramos', 'producto': 'Producto'},
-                        title=f"Cantidad producida - {turno_sel}"
-                    )
-                    fig_barras.update_traces(texttemplate='%{text:,.0f} kg', textposition='outside')
-                    st.plotly_chart(fig_barras, width="stretch")
-                else:
-                    st.info("No hay desglose de productos para este turno.")
-
-            with col_right:
-                st.subheader("📊 Distribución Porcentual (%)")
-                if not df_prod_actual.empty:
-                    fig_torta = px.pie(
-                        df_prod_actual,
-                        names='producto',
-                        values='porcentaje',
-                        hole=0.4,
-                        title=f"Participación por producto - {turno_sel}"
-                    )
-                    st.plotly_chart(fig_torta, width="stretch")
-                else:
-                    st.info("No hay porcentajes registrados para este turno.")
-
-            st.subheader("📋 Registro Detallado del Turno")
-            if not df_prod_actual.empty:
-                df_tabla = df_prod_actual[['producto', 'cantidad_kg', 'porcentaje']].copy()
-                df_tabla['cantidad_kg'] = df_tabla['cantidad_kg'].apply(lambda x: f"{int(x):,} kg" if float(x).is_integer() else f"{x:,.2f} kg")
-                df_tabla['porcentaje'] = df_tabla['porcentaje'].apply(lambda x: f"{x*100:.2f}%" if x <= 1 else f"{x:.2f}%")
-                st.dataframe(df_tabla, hide_index=True, width="stretch")
-
-            st.markdown("---")
-            st.subheader(f"⏱️ Registro de Paradas - Turno {turno_sel}")
-
-            if not df_paradas.empty and 'registro_id' in df_paradas.columns:
-                df_paradas_actual = df_paradas[df_paradas['registro_id'] == registro_id]
-                if not df_paradas_actual.empty:
-                    st.dataframe(df_paradas_actual[['motivo', 'detalle', 'horas_parada']], hide_index=True, width="stretch")
-                else:
-                    st.success("No se registraron paradas de planta en este turno.")
-            else:
-                st.success("No se registraron paradas de planta en este turno.")
-
-    with tab_acopio:
-        if df_acopio.empty:
-            st.info("Aún no hay registros de stock de acopio sincronizados en Supabase.")
-        else:
-            df_acopio["toneladas"] = pd.to_numeric(df_acopio["toneladas"], errors="coerce").fillna(0.0)
-            df_acopio["corte"] = df_acopio["fecha"].astype(str) + " " + df_acopio["hora"].astype(str)
-            cortes_unicos = sorted(df_acopio["corte"].unique().tolist(), reverse=True)
-
-            corte_sel = st.selectbox("Seleccionar Corte de Inventario (Fecha y Hora)", cortes_unicos)
-            df_corte = df_acopio[df_acopio["corte"] == corte_sel].copy()
-
-            df_corte = df_corte.sort_values(by=["grano", "silo"])
-
-            total_tn = df_corte["toneladas"].sum()
-            trigo_tn = df_corte[df_corte["grano"].str.contains("TRIGO", na=False)]["toneladas"].sum()
-            maiz_tn = df_corte[df_corte["grano"].str.contains("MAIZ|MAÍZ", na=False)]["toneladas"].sum()
-            silos_activos = len(df_corte[df_corte["toneladas"] > 0])
-
-            a1, a2, a3, a4 = st.columns(4)
-            a1.metric("Stock Total Acopio", f"{total_tn:,.2f} t")
-            a2.metric("Total Trigo", f"{trigo_tn:,.2f} t")
-            a3.metric("Total Maíz", f"{maiz_tn:,.2f} t")
-            a4.metric("Silos con Existencia", f"{silos_activos} / {len(df_corte)}")
-
-            st.markdown("---")
-
-            col_ac_izq, col_ac_der = st.columns([1.4, 1])
-
-            with col_ac_izq:
-                st.subheader("🏗️ Existencia por Silo (Toneladas)")
-                fig_silos = px.bar(
-                    df_corte,
-                    x="silo",
-                    y="toneladas",
-                    color="grano",
-                    text="toneladas",
-                    labels={"silo": "Silo", "toneladas": "Toneladas (t)", "grano": "Grano"},
-                    title=f"Distribución por Silo ({corte_sel})"
-                )
-                fig_silos.update_traces(texttemplate="%{text:,.1f} t", textposition="outside")
-                st.plotly_chart(fig_silos, width="stretch")
-
-            with col_ac_der:
-                st.subheader("🌾 Participación por Grano")
-                df_grano = df_corte.groupby("grano", as_index=False)["toneladas"].sum()
-                fig_grano = px.pie(
-                    df_grano,
-                    names="grano",
-                    values="toneladas",
-                    hole=0.4,
-                    title="Proporción de stock por grano"
-                )
-                st.plotly_chart(fig_grano, width="stretch")
-
-            st.subheader("📋 Detalle de Silos del Corte")
-            df_acopio_tabla = df_corte[["silo", "grano", "toneladas"]].copy()
-            df_acopio_tabla["toneladas"] = df_acopio_tabla["toneladas"].apply(lambda x: f"{x:,.2f} t")
-            df_acopio_tabla.columns = ["Silo", "Grano / Calidad", "Stock (t)"]
-            st.dataframe(df_acopio_tabla, hide_index=True, width="stretch")
-
-    with tab_semanal:
-        if df_sem.empty:
-            st.info("Aún no hay datos sincronizados de Gestión Semanal. Ejecuta `ingesta_gestion.py` en la PC de Planta.")
-        else:
-            hoy_iso = pd.Timestamp.now().strftime("%Y-%m-%d")
-
-            def formatear_semana(row):
-                ini = str(row["inicio_sab"])
-                fin = str(row["fin_vie"])
-                ini_fmt = pd.to_datetime(ini).strftime("%d/%m/%Y")
-                fin_fmt = pd.to_datetime(fin).strftime("%d/%m/%Y")
-                dias = float(row.get("dias_dato_real") or 0)
-                if ini <= hoy_iso <= fin:
-                    estado = f"🟢 Semana en curso ({dias:g} días)"
-                elif ini > hoy_iso:
-                    estado = "📅 Planificada (futura)"
-                else:
-                    estado = f"✅ Cerrada ({dias:g} días)"
-                return f"Sáb {ini_fmt} al Vie {fin_fmt} — {estado}"
-
-            df_sem = df_sem.sort_values("inicio_sab", ascending=False).reset_index(drop=True)
-            df_sem["etiqueta"] = df_sem.apply(formatear_semana, axis=1)
-
-            en_curso = df_sem[(df_sem["inicio_sab"] <= hoy_iso) & (df_sem["fin_vie"] >= hoy_iso)]
-            if not en_curso.empty:
-                default_idx = int(en_curso.index[0])
-            else:
-                pasadas = df_sem[df_sem["inicio_sab"] <= hoy_iso]
-                default_idx = int(pasadas.index[0]) if not pasadas.empty else 0
-
-            sem_sel_label = st.selectbox("Seleccionar Semana Operativa (Sábado a Viernes)", df_sem["etiqueta"].tolist(), index=default_idx)
-            sem = df_sem[df_sem["etiqueta"] == sem_sel_label].iloc[0]
-            ini_sel = sem["inicio_sab"]
-
-            trigo_mol = float(sem.get("trigo_molido_t") or 0)
-            obj_trigo = float(sem.get("objetivo_trigo_t") or 0)
-            cumpl = float(sem.get("cumplimiento_pct") or 0)
-            hs_plan = float(sem.get("horas_plan_h") or sem.get("horas_trabajadas") or 0)
-            hs_real = float(sem.get("horas_reales_h") or 0)
-            ext_real = float(sem.get("extraccion_real_pct") or 0)
-            desv_harina = float(sem.get("desvio_real_t_harina") or 0)
-            env_tot = float(sem.get("envasado_total_t") or 0)
-            pal_tot = float(sem.get("pallets_reales_total") or 0)
-
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Trigo Molido / Obj.", f"{trigo_mol:,.1f} t", f"{cumpl:.1f}% cumpl. (Obj: {obj_trigo:,.0f} t)")
-            m2.metric("Horas Plan vs Real", f"{hs_real:,.1f} h" if hs_real > 0 else f"{hs_plan:,.1f} h plan", f"Plan: {hs_plan:,.1f} h")
-            m3.metric("Extracción Real", f"{ext_real:.2f}%" if ext_real > 0 else "Sin cierre", f"{desv_harina:+.2f} t harina vs meta" if ext_real > 0 else None)
-            m4.metric("Total Envasado", f"{env_tot:,.2f} t" if env_tot > 0 else "–")
-            m5.metric("Pallets Reales", f"{int(pal_tot):,} plts" if pal_tot > 0 else "–")
-
-            st.markdown("---")
-
-            c_izq, c_der = st.columns(2)
-
-            with c_izq:
-                st.subheader("🎯 Harina: Plan vs Real vs Envasado (t)")
-                productos_comp = ["3/0 Pan", "3/0 Pasta", "4/0", "TP", "Semolín"]
-                plan_vals = [
-                    float(sem.get("plan_30_pan_t") or 0),
-                    float(sem.get("plan_30_pasta_t") or 0),
-                    float(sem.get("plan_40_t") or 0),
-                    float(sem.get("plan_tp_t") or 0),
-                    float(sem.get("plan_semolin_t") or 0),
-                ]
-                real_vals = [
-                    float(sem.get("real_30_pan_t") or 0),
-                    float(sem.get("real_30_pasta_t") or 0),
-                    float(sem.get("real_40_t") or 0),
-                    float(sem.get("real_tp_t") or 0),
-                    float(sem.get("real_semolin_t") or 0),
-                ]
-                env_vals = [
-                    float(sem.get("envasado_30_t") or 0),
-                    0.0,
-                    float(sem.get("envasado_40_t") or 0),
-                    float(sem.get("envasado_tp_t") or 0),
-                    float(sem.get("envasado_semolin_t") or 0),
-                ]
-
-                fig_comp = go.Figure(data=[
-                    go.Bar(name="Plan (t)", x=productos_comp, y=plan_vals),
-                    go.Bar(name="Real Producido (t)", x=productos_comp, y=real_vals),
-                    go.Bar(name="Envasado Real (t)", x=productos_comp, y=env_vals),
-                ])
-                fig_comp.update_layout(barmode="group", yaxis_title="Toneladas (t)", legend=dict(orientation="h", y=1.12))
-                st.plotly_chart(fig_comp, width="stretch")
-
-            with c_der:
-                st.subheader("📈 Evolución Semanal de Cumplimiento (%)")
-                df_hist = df_sem[(df_sem["inicio_sab"] <= hoy_iso) & (pd.to_numeric(df_sem["cumplimiento_pct"], errors="coerce").notna())].sort_values("inicio_sab")
-                if not df_hist.empty:
-                    fig_evol = px.line(
-                        df_hist,
-                        x="inicio_sab",
-                        y="cumplimiento_pct",
-                        markers=True,
-                        labels={"inicio_sab": "Inicio Semana", "cumplimiento_pct": "Cumplimiento (%)"},
-                        title="Cumplimiento de molienda por semana"
-                    )
-                    fig_evol.add_hline(y=100, line_dash="dash", line_color="green", annotation_text="Objetivo 100%")
-                    st.plotly_chart(fig_evol, width="stretch")
-
-            st.markdown("---")
-
-            col_lab, col_ev = st.columns([1.4, 1])
-
-            with col_lab:
-                st.subheader("🧪 Calidad de Laboratorio (Promedio Semanal)")
-                df_lab_sem = df_lab[df_lab["inicio_sab"] == ini_sel].copy() if not df_lab.empty else pd.DataFrame()
-                if not df_lab_sem.empty:
-                    df_lab_show = df_lab_sem[["producto", "parametro", "criterio", "promedio", "desvio", "estado"]].copy()
-                    df_lab_show.columns = ["Producto", "Parámetro", "Criterio", "Promedio", "Desvío", "Estado"]
-                    st.dataframe(df_lab_show, hide_index=True, width="stretch")
-                else:
-                    st.info("Sin registros de laboratorio cargados para esta semana.")
-
-            with col_ev:
-                st.subheader("⚠️ Eventos No Programados")
-                df_ev_sem = df_ev[df_ev["inicio_sab"] == ini_sel].copy() if not df_ev.empty else pd.DataFrame()
-                if not df_ev_sem.empty:
-                    df_ev_show = df_ev_sem[["evento", "motivo", "minutos"]].copy()
-                    df_ev_show.columns = ["Evento", "Motivo", "Minutos"]
-                    st.dataframe(df_ev_show, hide_index=True, width="stretch")
-                else:
-                    st.success("Sin eventos no programados registrados en esta semana.")
-
-            st.markdown("---")
-            st.subheader("🌽 Subproductos, Pellet y Línea de Maíz")
-            s1, s2, s3, s4 = st.columns(4)
-            s1.metric("Pellet Subprod. Trigo", f"{float(sem.get('pellet_subprod_trigo_t') or 0):,.2f} t")
-            s2.metric("Pellet Total / Camiones", f"{float(sem.get('pellet_total_t') or 0):,.2f} t", f"{float(sem.get('camiones_pellet_total') or 0):.1f} camiones")
-            s3.metric("Maíz Molido", f"{float(sem.get('maiz_molido_t') or 0):,.2f} t")
-            s4.metric("Polenta / Harina Maíz", f"{float(sem.get('polenta_t') or 0):,.2f} t / {float(sem.get('harina_maiz_t') or 0):,.2f} t")
-
-    with tab_aumax:
-        render_seccion_aumax(supabase)
-        st.divider()
-        render_formulario_carga_manual(supabase)
-
-except Exception as e:
-    st.error(f"Error al conectar o renderizar datos: {e}")
+                    lambda x: f"{float(x)*100:.2f}%" if pd.notna(
