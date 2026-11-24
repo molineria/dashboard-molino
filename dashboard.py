@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -154,7 +153,26 @@ def render_seccion_aumax(supabase_client):
 
     if not df_caud.empty:
         df_caud = df_caud.dropna(subset=["fecha_captura"]).copy()
+
     if not df_caud.empty:
+        # Conversión de kg/h a t/h (dividiendo por 1000)
+        df_caud["ing_trg_th"] = pd.to_numeric(df_caud.get("caudal_ing_trg", 0), errors="coerce").fillna(0.0) / 1000.0
+        df_caud["c_3x0_th"] = pd.to_numeric(df_caud.get("caudal_3x0", 0), errors="coerce").fillna(0.0) / 1000.0
+        df_caud["c_4x0_th"] = pd.to_numeric(df_caud.get("caudal_4x0", 0), errors="coerce").fillna(0.0) / 1000.0
+        df_caud["c_semolin_th"] = pd.to_numeric(df_caud.get("caudal_semolin", 0), errors="coerce").fillna(0.0) / 1000.0
+        df_caud["c_afrechillo_th"] = pd.to_numeric(df_caud.get("caudal_afrechillo", 0), errors="coerce").fillna(0.0) / 1000.0
+        col_tapera = "caudal_tapera" if "caudal_tapera" in df_caud.columns else "caudal_6"
+        df_caud["c_tapera_th"] = pd.to_numeric(df_caud.get(col_tapera, 0), errors="coerce").fillna(0.0) / 1000.0
+
+        # Caudal B1 = suma de 3x0 + 4x0 + Semolín + Afrechillo + Tapera (t/h)
+        df_caud["caudal_b1_th"] = (
+            df_caud["c_3x0_th"]
+            + df_caud["c_4x0_th"]
+            + df_caud["c_semolin_th"]
+            + df_caud["c_afrechillo_th"]
+            + df_caud["c_tapera_th"]
+        )
+
         df_caud["dt"] = pd.to_datetime(df_caud["fecha_captura"], format="ISO8601", utc=True)
         ultima_lectura = df_caud.iloc[0]["dt"].astimezone(TZ_AR)
         minutos_sin_datos = (datetime.now(TZ_AR) - ultima_lectura).total_seconds() / 60.0
@@ -164,8 +182,8 @@ def render_seccion_aumax(supabase_client):
                 f"⏱️ **Sin lecturas recientes de caudales:** última transmisión hace {int(minutos_sin_datos)} min ({ultima_lectura.strftime('%d/%m %H:%M')})."
             )
 
-        if float(pd.to_numeric(df_caud.iloc[0].get("caudal_ing_trg"), errors="coerce") or 0) <= 0:
-            alertas.append("🛑 **Molino detenido / sin caudal de ingreso de trigo:** Caudal IngTrig en 0 kg/h.")
+        if float(df_caud.iloc[0]["ing_trg_th"]) <= 0:
+            alertas.append("🛑 **Molino detenido / sin caudal de ingreso de trigo:** Caudal IngTrig en 0.00 t/h.")
 
     if alertas:
         for msg in alertas:
@@ -190,19 +208,21 @@ def render_seccion_aumax(supabase_client):
     col3.metric("Silo Habilitado", silo_act)
     col4.metric("Último Registro Caudales", hora_act)
 
-    st.subheader("🌊 Registro de Caudales Instantáneos (kg/h)")
+    st.subheader("🌊 Registro de Caudales Instantáneos (t/h)")
     ult_c = df_caud.iloc[0] if not df_caud.empty else {}
-    c_k1, c_k2, c_k3, c_k4, c_k5, c_k6 = st.columns(6)
-    def fmt_caudal(col_name):
-        val = pd.to_numeric(ult_c.get(col_name), errors="coerce")
-        return f"{float(val):,.2f}" if pd.notna(val) else "0.00"
+    c_k1, c_k2, c_k3, c_k4, c_k5, c_k6, c_k7 = st.columns(7)
 
-    c_k1.metric("Caudal IngTrig", fmt_caudal("caudal_ing_trg"))
-    c_k2.metric("Caudal 3x0", fmt_caudal("caudal_3x0"))
-    c_k3.metric("Caudal 4x0", fmt_caudal("caudal_4x0"))
-    c_k4.metric("Caudal Afrechillo", fmt_caudal("caudal_afrechillo"))
-    c_k5.metric("Caudal Semolín", fmt_caudal("caudal_semolin"))
-    c_k6.metric("Caudal BIIr", fmt_caudal("caudal_bllr"))
+    def fmt_caudal_th(col_name):
+        val = pd.to_numeric(ult_c.get(col_name), errors="coerce")
+        return f"{float(val):.2f} t/h" if pd.notna(val) else "0.00 t/h"
+
+    c_k1.metric("Caudal IngTrig", fmt_caudal_th("ing_trg_th"))
+    c_k2.metric("Caudal B1 (Total)", fmt_caudal_th("caudal_b1_th"))
+    c_k3.metric("Caudal 3x0", fmt_caudal_th("c_3x0_th"))
+    c_k4.metric("Caudal 4x0", fmt_caudal_th("c_4x0_th"))
+    c_k5.metric("Caudal Semolín", fmt_caudal_th("c_semolin_th"))
+    c_k6.metric("Caudal Afrechillo", fmt_caudal_th("c_afrechillo_th"))
+    c_k7.metric("Caudal Tapera", fmt_caudal_th("c_tapera_th"))
 
     if not df_caud.empty:
         df_caud_plot = df_caud.copy()
@@ -210,17 +230,27 @@ def render_seccion_aumax(supabase_client):
         df_caud_plot = df_caud_plot.sort_values("hora_ar")
 
         fig_caud = go.Figure()
-        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["caudal_ing_trg"], name="IngTrig"))
-        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["caudal_3x0"], name="3x0"))
-        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["caudal_4x0"], name="4x0"))
-        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["caudal_afrechillo"], name="Afrechillo"))
-        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["caudal_semolin"], name="Semolín"))
+        fig_caud.add_trace(
+            go.Scatter(
+                x=df_caud_plot["hora_ar"],
+                y=df_caud_plot["caudal_b1_th"],
+                name="Caudal B1 (Suma)",
+                mode="lines",
+                line=dict(color="#F59E0B", width=3),
+            )
+        )
+        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["c_3x0_th"], name="3x0"))
+        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["c_4x0_th"], name="4x0"))
+        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["c_semolin_th"], name="Semolín"))
+        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["c_afrechillo_th"], name="Afrechillo"))
+        fig_caud.add_trace(go.Scatter(x=df_caud_plot["hora_ar"], y=df_caud_plot["c_tapera_th"], name="Tapera"))
+
         fig_caud.update_layout(
-            title="Curva de Caudales en Tiempo Real (kg/h)",
+            title="Curva de Caudales en Tiempo Real (t/h)",
             xaxis_title="Hora (Planta)",
-            yaxis_title="Caudal (kg/h)",
+            yaxis=dict(title="Caudal (t/h)", range=[0, 10], dtick=2),
             legend=dict(orientation="h", y=1.12),
-            height=290,
+            height=310,
         )
         st.plotly_chart(fig_caud, width="stretch")
 
